@@ -58,6 +58,7 @@ $from_header
 
 $subject
 
+URL: $site_url
 Status: $status
 Timestamp: $timestamp
 Previous status: $prev_status
