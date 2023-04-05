@@ -35,11 +35,6 @@ timestamp_now () {
     date '+%Y-%m-%dT%H:%M:%S'
 }
 
-# Writes core log entry
-log_core () {
-    printf "%s %s\\n" "$(timestamp_now)" "$*" >> "$log_dir/web-monitoring.log"
-}
-
 # Sends an alarm email for a single site
 send_alarm_email () {
     subject="Web monitoring $status for $site_name"
@@ -132,9 +127,7 @@ tmp_dir="$(mktemp -d "$tmp_dir_base/web-monitoring.XXXXXX")"
 trap 'rm -rf "$tmp_dir"' 0
 
 # Process each site
-log_core 'Monitoring cycle starts'
 for site in $sites; do
     web_monitoring &
 done
 wait
-log_core 'Monitoring cycle completed'
