@@ -1,0 +1,139 @@
+#! /bin/bash
+# Note: Need Bash for $RANDOM while otherwise rather POSIXish
+
+# Stop on error
+set -e
+
+# Directories and files
+basedir="$(dirname "$0")"
+config="config.env"
+
+# Switch to base directory
+cd "$basedir"
+
+# Use secure umask for created directories and files
+umask 077
+
+
+# Source configuration
+if [ -e "$config" ]; then
+    . ./"$config"
+else
+    echo 'ERROR: Copy config.env.template to config.env and edit it to suit your needs.' 1>&2
+    exit 1
+fi
+
+# Source tools
+. './tools.sh'
+if [ -e 'custom-tools.sh' ]; then
+    . './custom-tools.sh'
+fi
+
+
+# Outputs timestamp
+timestamp_now () {
+    date '+%Y-%m-%dT%H:%M:%S'
+}
+
+# Writes core log entry
+log_core () {
+    printf "%s %s\\n" "$(timestamp_now)" "$*" >> "$log_dir/web-monitoring.log"
+}
+
+# Sends an alarm email for a single site
+send_alarm_email () {
+    subject="Web monitoring $status for $site_name"
+    from_opt=
+    from_header=
+    if [ -n "$from_email" ]; then
+        from_opt="-f $from_email"
+        from_header="From: $from_email"
+    fi
+    ( cat <<EOS
+MIME-Version: 1.0
+Content-Type: text/plain;charset=utf-8
+To: $(echo "$site_alarm_email" | sed -e 's/\s\s*/, /g')
+Subject: =?utf-8?B?$(printf '%s' "$subject" | base64 -w 0)?=
+$from_header
+
+$subject
+
+Status: $status
+Timestamp: $timestamp
+Previous status: $prev_status
+Previous timestamp: $prev_timestamp
+Monitoring host: $(hostname)
+
+Output:
+$(cat "$tmp_dir/$site.output")
+
+
+--  
+$(hostname):$0
+EOS
+) | "$tool_email" $from_opt $site_alarm_email
+}
+
+# Runs monitoring on a single site
+web_monitoring () {
+
+    # Read site configuration
+    for var in name url alarm_email rnd_delay tool_monitor tries timeout tool_mail; do
+        eval "site_$var=\"\${${var}_$site:-\$$var}\""
+    done
+
+    # Sleep for a random delay
+    sleep $(( $RANDOM % $(( $site_rnd_delay + 1 )) ))
+
+    # Perform monitoring
+    timestamp="$(timestamp_now)"
+    startsecs="$(date '+%s')"
+    set +e
+    "$tool_monitor" "$site_url" /dev/null > "$tmp_dir/$site.output" 2>&1
+    result=$?
+    set -e
+    endsecs="$(date '+%s')"
+
+    # Determine status
+    if [ $result -eq 0 ]; then
+        status=OK
+    else
+        status=FAIL
+    fi
+
+    # Output status to log
+    printf '%s %s %d\n' "$timestamp" "$status" $(( $endsecs - $startsecs )) >> "$log_dir/$site.log"
+
+    # Send alarm email on status changes
+    status_file="$state_dir/$site.status"
+    prev_status="OK"
+    prev_timestamp=
+    if [ -f "$status_file" ]; then
+        read prev_timestamp prev_status rest < "$status_file"
+    fi
+    if [ "$status" != "$prev_status" ] || [ ! -f "$status_file" ]; then
+        echo "$timestamp $status" > "$status_file.new"
+        mv "$status_file.new" "$status_file"
+    fi
+    if [ "$status" != "$prev_status" ]; then
+        send_alarm_email
+    fi
+
+}
+
+
+# Initialize log and state directories, if they do not exist
+mkdir -p "$state_dir"
+mkdir -p "$log_dir"
+
+# Create temporary directory and remove it on exit
+tmp_dir="$(mktemp -d "$tmp_dir_base/web-monitoring.XXXXXX")"
+trap 'rm -rf "$tmp_dir"' 0
+
+# Process each site
+log_core 'Monitoring cycle starts'
+for site in $sites; do
+    web_monitoring &
+done
+wait
+log_core 'Monitoring cycle completed'
