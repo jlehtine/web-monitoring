@@ -37,6 +37,11 @@ timestamp_now () {
 
 # Sends an alarm email for a single site
 send_alarm_email () {
+    # Do nothing if no alarm email recipient configured
+    if [ -z "$site_alarm_email" -o "$site_alarm_email" = none ]; then
+        return
+    fi
+
     subject="Web monitoring $status for $site_name"
     from_opt=
     from_header=
@@ -115,6 +120,12 @@ web_monitoring () {
         send_alarm_email
     fi
 
+    # Signal status
+    if [ "$status" = OK ]; then
+        return 0
+    else
+        return 1
+    fi
 }
 
 
@@ -125,6 +136,14 @@ mkdir -p "$log_dir"
 # Create temporary directory and remove it on exit
 tmp_dir="$(mktemp -d "$tmp_dir_base/web-monitoring.XXXXXX")"
 trap 'rm -rf "$tmp_dir"' 0
+
+# Process gate site, if any
+if [ -n "$gate_site" ]; then
+    eval "rnd_delay_$gate_site=0"
+    eval "alarm_email_$gate_site=none"
+    site="$gate_site"
+    web_monitoring || exit 0
+fi
 
 # Process each site
 for site in $sites; do
